@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Local AI Code Editor</title>
+    <style>
+        body { margin: 0; display: flex; height: 100vh; font-family: sans-serif; background: #1e1e1e; color: #fff; }
+        #sidebar { width: 300px; padding: 20px; border-right: 1px solid #333; display: flex; flex-direction: column; }
+        #editor-container { flex-grow: 1; position: relative; }
+        textarea { width: 100%; height: 100px; background: #2d2d2d; color: #fff; border: 1px solid #444; padding: 10px; border-radius: 4px; resize: none; }
+        button { margin-top: 10px; padding: 10px; background: #007acc; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
+        button:hover { background: #005f9e; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        #status { margin-top: 10px; font-size: 0.8rem; color: #aaa; }
+    </style>
+    <!-- Load Monaco Editor from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h3>AI Instructions</h3>
+        <p style="font-size: 0.9rem; color: #aaa;">Describe what you want to change (e.g., "Add error handling", "Convert to async").</p>
+        <textarea id="instruction" placeholder="e.g., Refactor this function to be more efficient..."></textarea>
+        <button id="run-btn" onclick="generateCode()">✨ Generate Code</button>
+        <div id="status">Ready</div>
+    </div>
+
+    <div id="editor-container"></div>
+
+    <script>
+        let editor;
+        // Initialize Monaco Editor
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' }});
+        require(['vs/editor/editor.main'], function() {
+            editor = monaco.editor.create(document.getElementById('editor-container'), {
+                value: 'def hello_world():\n    print("Hello, AI!")\n',
+                language: 'python',
+                theme: 'vs-dark',
+                automaticLayout: true,
+                fontSize: 14
+            });
+        });
+
+        async function generateCode() {
+            const instruction = document.getElementById('instruction').value;
+            const code = editor.getValue();
+            const btn = document.getElementById('run-btn');
+            const status = document.getElementById('status');
+
+            if (!instruction) return alert("Please enter an instruction");
+
+            btn.disabled = true;
+            status.innerText = "⏳ AI is thinking...";
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, instruction })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let newCode = ""; 
+
+                // Clear editor to stream new content (or you could append)
+                // For this demo, we stream into a buffer then replace
+                // To stream directly into editor requires delta calculations, 
+                // so we will stream to a buffer and update periodically for simplicity
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            if (data.token) {
+                                newCode += data.token;
+                                // Update editor with current buffer
+                                editor.setValue(newCode); 
+                                // Scroll to bottom
+                                editor.setPosition({ lineNumber: editor.getModel().getLineCount(), column: 1 });
+                            }
+                            if (data.error) {
+                                status.innerText = "❌ Error: " + data.error;
+                            }
+                        } catch (e) { console.error("Parse error", e); }
+                    }
+                }
+                status.innerText = "✅ Done";
+            } catch (err) {
+                status.innerText = "❌ Connection Failed";
+                console.error(err);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
